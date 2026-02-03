@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Food Manager Cloud</title>
+    
+    <!-- Frameworks -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Firebase Compat SDKs (Beste Wahl für Single-File Hosting) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        body { 
+            -webkit-tap-highlight-color: transparent; 
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+        }
+        input[type="date"] {
+            appearance: none;
+            -webkit-appearance: none;
+            min-height: 1.2em;
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Firebase Konfiguration
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'food-manager-app-v1';
+
+        // Firebase Initialisierung
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        function App() {
+            const [user, setUser] = React.useState(null);
+            const [meals, setMeals] = React.useState([]);
+            const [categories, setCategories] = React.useState([]);
+            const [isMealModalOpen, setIsMealModalOpen] = React.useState(false);
+            const [searchTerm, setSearchTerm] = React.useState("");
+            
+            const [currentMeal, setCurrentMeal] = React.useState({ 
+                name: "", 
+                categoryIds: [], 
+                isVeggie: false, 
+                lastCooked: new Date().toISOString().split('T')[0] 
+            });
+            const [editingId, setEditingId] = React.useState(null);
+
+            // Cloud Synchronisierung & Auth
+            React.useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(async (u) => {
+                    if (!u) {
+                        await auth.signInAnonymously();
+                    } else {
+                        setUser(u);
+                        
+                        const mealsPath = `artifacts/${appId}/users/${u.uid}/meals`;
+                        const catsPath = `artifacts/${appId}/users/${u.uid}/categories`;
+
+                        // Echtzeit-Updates für Mahlzeiten
+                        db.collection(mealsPath).onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setMeals(data);
+                        });
+
+                        // Echtzeit-Updates für Kategorien
+                        db.collection(catsPath).onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            if (data.length === 0) {
+                                // Standardkategorien falls leer
+                                const defaults = [
+                                    { name: 'Pasta', color: 'bg-orange-100 text-orange-700' },
+                                    { name: 'Salat', color: 'bg-green-100 text-green-700' },
+                                    { name: 'Schnell', color: 'bg-blue-100 text-blue-700' }
+                                ];
+                                defaults.forEach(c => db.collection(catsPath).add(c));
+                            }
+                            setCategories(data);
+                        });
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Icons neu rendern wenn sich UI ändert
+            React.useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [meals, categories, isMealModalOpen, user]);
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if (!user || !currentMeal.name.trim()) return;
+                
+                const path = `artifacts/${appId}/users/${user.uid}/meals`;
+                const { id, ...saveData } = currentMeal;
+
+                try {
+                    if (editingId) {
+                        await db.doc(`${path}/${editingId}`).update(saveData);
+                    } else {
+                        await db.collection(path).add(saveData);
+                    }
+                    setIsMealModalOpen(false);
+                    setEditingId(null);
+                } catch (err) {
+                    console.error("Speicherfehler:", err);
+                }
+            };
+
+            const filteredMeals = meals.filter(m => 
+                (m.name || "").toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            if (!user) return (
+                <div className="flex flex-col h-screen items-center justify-center bg-slate-50">
+                    <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="mt-4 font-bold text-slate-400 animate-pulse uppercase tracking-widest text-xs">Cloud Verbindung...</p>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-28 max-w-2xl mx-auto">
+                    {/* Header */}
+                    <header className="bg-white/80 backdrop-blur-lg sticky top-0 z-30 p-5 border-b flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-orange-500 p-2 rounded-2xl text-white shadow-lg shadow-orange-200">
+                                <i data-lucide="chef-hat" className="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <h1 className="font-black text-xl text-slate-800 leading-tight">Food Manager</h1>
+                                <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest">Online & Synchronisiert</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="p-4 space-y-6">
+                        {/* Suche */}
+                        <div className="relative group">
+                            <i data-lucide="search" className="absolute left-4 top-4 text-slate-300 w-5 h-5"></i>
+                            <input 
+                                type="text" 
+                                placeholder="Was möchtest du essen?" 
+                                className="w-full pl-12 pr-4 py-4 bg-white rounded-3xl border-none shadow-sm focus:ring-2 focus:ring-orange-500 outline-none font-medium transition-all"
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+
+                        {/* Mahlzeiten Liste */}
+                        <div className="grid gap-4">
+                            {filteredMeals.length > 0 ? filteredMeals.map(m => (
+                                <div 
+                                    key={m.id} 
+                                    onClick={() => { setCurrentMeal(m); setEditingId(m.id); setIsMealModalOpen(true); }}
+                                    className="bg-white p-5 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col gap-3 active:scale-[0.97] transition-all cursor-pointer hover:shadow-md"
+                                >
+                                    <div className="flex flex-wrap gap-2">
+                                        {m.categoryIds?.map(id => {
+                                            const c = categories.find(x => x.id === id);
+                                            return c ? <span key={id} className={`text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-tighter ${c.color}`}>{c.name}</span> : null;
+                                        })}
+                                    </div>
+                                    <h3 className="font-extrabold text-slate-800 text-xl px-1">{m.name}</h3>
+                                    <div className="flex justify-between items-center text-xs text-slate-400 font-bold px-1 pt-1 border-t border-slate-50">
+                                        <div className="flex items-center gap-2">
+                                            <i data-lucide="calendar" className="w-4 h-4 text-slate-300"></i>
+                                            {m.lastCooked ? new Date(m.lastCooked).toLocaleDateString('de-DE') : 'Noch nie'}
+                                        </div>
+                                        {m.isVeggie && (
+                                            <div className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-lg">
+                                                <i data-lucide="leaf" className="w-3.5 h-3.5"></i>
+                                                <span>VEGGIE</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )) : (
+                                <div className="text-center py-20 bg-white/50 rounded-[3rem] border-2 border-dashed border-slate-200">
+                                    <i data-lucide="utensils" className="w-12 h-12 mx-auto mb-3 text-slate-200"></i>
+                                    <p className="font-bold text-slate-300">Keine Gerichte gefunden</p>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+
+                    {/* FAB Button */}
+                    <button 
+                        onClick={() => { 
+                            setCurrentMeal({name:"", categoryIds:[], isVeggie:false, lastCooked: new Date().toISOString().split('T')[0]}); 
+                            setEditingId(null); 
+                            setIsMealModalOpen(true); 
+                        }}
+                        className="fixed bottom-10 right-6 w-16 h-16 bg-orange-500 text-white rounded-full shadow-2xl shadow-orange-300 flex items-center justify-center active:scale-90 transition-all z-40"
+                    >
+                        <i data-lucide="plus" className="w-8 h-8"></i>
+                    </button>
+
+                    {/* Mahlzeit Modal */}
+                    {isMealModalOpen && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
+                            <div className="bg-white w-full max-w-md rounded-t-[3rem] sm:rounded-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom duration-300 overflow-y-auto max-h-[90vh]">
+                                <div className="flex justify-between items-center mb-8">
+                                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">{editingId ? 'Bearbeiten' : 'Neues Gericht'}</h2>
+                                    <button onClick={() => setIsMealModalOpen(false)} className="bg-slate-100 p-3 rounded-full text-slate-500"><i data-lucide="x" className="w-5 h-5"></i></button>
+                                </div>
+                                
+                                <form onSubmit={handleSave} className="space-y-8">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Gericht Name</label>
+                                        <input 
+                                            required type="text" value={currentMeal.name}
+                                            onChange={e => setCurrentMeal({...currentMeal, name: e.target.value})}
+                                            className="w-full p-5 bg-slate-50 rounded-[2rem] border-2 border-transparent focus:border-orange-500 focus:bg-white transition-all font-bold text-xl outline-none"
+                                            placeholder="z.B. Käsespätzle"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Kategorien</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {categories.map(c => {
+                                                const active = currentMeal.categoryIds?.includes(c.id);
+                                                return (
+                                                    <button 
+                                                        key={c.id} type="button"
+                                                        onClick={() => {
+                                                            const ids = currentMeal.categoryIds || [];
+                                                            setCurrentMeal({...currentMeal, categoryIds: active ? ids.filter(id => id !== c.id) : [...ids, c.id]});
+                                                        }}
+                                                        className={`px-5 py-2.5 rounded-2xl text-[11px] font-black uppercase tracking-wider border-2 transition-all ${active ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-sm' : 'border-slate-100 bg-white text-slate-400'}`}
+                                                    >{c.name}</button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Datum</label>
+                                            <input 
+                                                type="date" value={currentMeal.lastCooked}
+                                                onChange={e => setCurrentMeal({...currentMeal, lastCooked: e.target.value})}
+                                                className="w-full p-4 bg-slate-50 rounded-2xl border-none outline-none font-bold text-slate-600"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Vegetarisch</label>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => setCurrentMeal({...currentMeal, isVeggie: !currentMeal.isVeggie})}
+                                                className={`w-full p-4 rounded-2xl border-2 font-black text-xs flex items-center justify-center gap-2 transition-all ${currentMeal.isVeggie ? 'border-green-500 bg-green-50 text-green-700' : 'border-slate-100 bg-white text-slate-300'}`}
+                                            >
+                                                <i data-lucide="leaf" className="w-4 h-4"></i> VEGGIE
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex gap-3 pt-6">
+                                        {editingId && (
+                                            <button 
+                                                type="button" 
+                                                onClick={async () => { if(confirm('Gericht wirklich löschen?')) { await db.doc(`artifacts/${appId}/users/${user.uid}/meals/${editingId}`).delete(); setIsMealModalOpen(false); } }}
+                                                className="p-5 bg-red-50 text-red-500 rounded-[1.5rem] active:scale-90 transition-all"
+                                            ><i data-lucide="trash-2" className="w-6 h-6"></i></button>
+                                        )}
+                                        <button type="submit" className="flex-1 bg-orange-500 text-white font-black py-5 rounded-[1.5rem] shadow-xl shadow-orange-100 active:scale-95 transition-all uppercase tracking-widest text-sm">Speichern</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
