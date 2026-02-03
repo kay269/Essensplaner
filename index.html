@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Food Manager Cloud</title>
+    <!-- Tailwind CSS für das Design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel für JSX Support im Browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Versteckt Scrollbars für ein saubereres App-Gefühl */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        body { -webkit-tap-highlight-color: transparent; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Firebase Konfiguration (wird von der Umgebung bereitgestellt)
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'food-manager-mobile';
+
+        // Firebase Module laden
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        function App() {
+            const [user, setUser] = React.useState(null);
+            const [meals, setMeals] = React.useState([]);
+            const [categories, setCategories] = React.useState([]);
+            const [isMealModalOpen, setIsMealModalOpen] = React.useState(false);
+            const [currentMeal, setCurrentMeal] = React.useState({ name: "", categoryIds: [], isVeggie: false, lastCooked: new Date().toISOString().split('T')[0] });
+            const [editingId, setEditingId] = React.useState(null);
+            const [searchTerm, setSearchTerm] = React.useState("");
+
+            // Verbindung zur Cloud herstellen
+            React.useEffect(() => {
+                const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
+                    if (!u) {
+                        await signInAnonymously(auth);
+                    } else {
+                        setUser(u);
+                        // Daten-Abonnements
+                        const mRef = collection(db, 'artifacts', appId, 'users', u.uid, 'meals');
+                        const cRef = collection(db, 'artifacts', appId, 'users', u.uid, 'categories');
+
+                        onSnapshot(mRef, (s) => setMeals(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+                        onSnapshot(cRef, (s) => {
+                            const cats = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                            if (cats.length === 0) {
+                                // Standardkategorien anlegen
+                                [
+                                    { name: 'Pasta', color: 'bg-orange-100 text-orange-700' },
+                                    { name: 'Salat', color: 'bg-green-100 text-green-700' },
+                                    { name: 'Schnell', color: 'bg-blue-100 text-blue-700' }
+                                ].forEach(c => addDoc(cRef, c));
+                            }
+                            setCategories(cats);
+                        });
+                    }
+                });
+                return () => unsubscribeAuth();
+            }, []);
+
+            // Icons nach jedem Render aktualisieren
+            React.useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if (!user) return;
+                const mRef = collection(db, 'artifacts', appId, 'users', user.uid, 'meals');
+                const { id, ...data } = currentMeal;
+                if (editingId) {
+                    await updateDoc(doc(mRef, editingId), data);
+                } else {
+                    await addDoc(mRef, data);
+                }
+                setIsMealModalOpen(false);
+                setEditingId(null);
+            };
+
+            const filteredMeals = meals.filter(m => m.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+            if (!user) return (
+                <div className="flex flex-col h-screen items-center justify-center p-6 text-center space-y-4">
+                    <div className="animate-spin text-orange-500"><i data-lucide="loader-2" size="40"></i></div>
+                    <p className="font-bold text-slate-500">Verbinde mit deinem Cloud-Speicher...</p>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-24">
+                    {/* Header */}
+                    <header className="bg-white/80 backdrop-blur-md sticky top-0 z-20 p-4 border-b flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-orange-500 p-1.5 rounded-lg text-white shadow-lg shadow-orange-200">
+                                <i data-lucide="chef-hat" size="20"></i>
+                            </div>
+                            <h1 className="font-black text-xl tracking-tight text-slate-800">Food Manager</h1>
+                        </div>
+                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    </header>
+
+                    <main className="p-4 space-y-4">
+                        {/* Suche */}
+                        <div className="relative group">
+                            <i data-lucide="search" className="absolute left-3 top-3.5 text-slate-300 w-5 h-5"></i>
+                            <input 
+                                type="text" placeholder="Gericht suchen..." 
+                                className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl border-none shadow-sm focus:ring-2 focus:ring-orange-500 transition-all outline-none font-medium"
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+
+                        {/* Liste */}
+                        <div className="grid gap-3">
+                            {filteredMeals.length > 0 ? filteredMeals.map(m => (
+                                <div 
+                                    key={m.id} 
+                                    onClick={() => { setCurrentMeal(m); setEditingId(m.id); setIsMealModalOpen(true); }}
+                                    className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-2 active:scale-[0.98] transition-all"
+                                >
+                                    <div className="flex flex-wrap gap-1">
+                                        {m.categoryIds?.map(id => {
+                                            const c = categories.find(x => x.id === id);
+                                            return c ? <span key={id} className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${c.color}`}>{c.name}</span> : null;
+                                        })}
+                                    </div>
+                                    <h3 className="font-bold text-slate-800 text-lg">{m.name}</h3>
+                                    <div className="flex justify-between items-center text-xs text-slate-400 font-bold uppercase tracking-wider">
+                                        <div className="flex items-center gap-1">
+                                            <i data-lucide="calendar" size="12"></i>
+                                            {m.lastCooked ? new Date(m.lastCooked).toLocaleDateString('de-DE') : 'Neu'}
+                                        </div>
+                                        {m.isVeggie && <span className="text-green-500 flex items-center gap-1"><i data-lucide="leaf" size="12"></i> Veggie</span>}
+                                    </div>
+                                </div>
+                            )) : (
+                                <div className="text-center py-20 text-slate-300">
+                                    <i data-lucide="utensils" size="48" className="mx-auto mb-2 opacity-20"></i>
+                                    <p className="font-bold">Noch keine Gerichte gespeichert</p>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+
+                    {/* FAB Button */}
+                    <button 
+                        onClick={() => { 
+                            setCurrentMeal({name:"", categoryIds:[], isVeggie:false, lastCooked: new Date().toISOString().split('T')[0]}); 
+                            setEditingId(null); 
+                            setIsMealModalOpen(true); 
+                        }}
+                        className="fixed bottom-8 right-6 w-16 h-16 bg-orange-500 text-white rounded-full shadow-2xl flex items-center justify-center active:scale-90 active:bg-orange-600 transition-all z-30"
+                    >
+                        <i data-lucide="plus" size="32"></i>
+                    </button>
+
+                    {/* Modal */}
+                    {isMealModalOpen && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center">
+                            <div className="bg-white w-full max-w-md rounded-t-[32px] sm:rounded-[32px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-300">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-black text-slate-800">{editingId ? 'Bearbeiten' : 'Neues Rezept'}</h2>
+                                    <button onClick={() => setIsMealModalOpen(false)} className="bg-slate-100 p-2 rounded-full"><i data-lucide="x" size="20"></i></button>
+                                </div>
+                                <form onSubmit={handleSave} className="space-y-6">
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">Name des Gerichts</label>
+                                        <input 
+                                            required type="text" value={currentMeal.name}
+                                            onChange={e => setCurrentMeal({...currentMeal, name: e.target.value})}
+                                            className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-xl outline-none focus:ring-2 focus:ring-orange-500"
+                                            placeholder="z.B. Lasagne"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">Kategorien</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {categories.map(c => {
+                                                const active = currentMeal.categoryIds?.includes(c.id);
+                                                return (
+                                                    <button 
+                                                        key={c.id} type="button"
+                                                        onClick={() => setCurrentMeal({...currentMeal, categoryIds: active ? currentMeal.categoryIds.filter(id => id !== c.id) : [...(currentMeal.categoryIds || []), c.id]})}
+                                                        className={`px-4 py-2 rounded-xl text-sm font-bold border-2 transition-all ${active ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-100 text-slate-400'}`}
+                                                    >{c.name}</button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <div className="flex-1">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">Zuletzt gekocht</label>
+                                            <input 
+                                                type="date" value={currentMeal.lastCooked}
+                                                onChange={e => setCurrentMeal({...currentMeal, lastCooked: e.target.value})}
+                                                className="w-full p-3 bg-slate-50 rounded-xl border-none outline-none font-bold"
+                                            />
+                                        </div>
+                                        <div className="flex-1">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">Optionen</label>
+                                            <button 
+                                                type="button" onClick={() => setCurrentMeal({...currentMeal, isVeggie: !currentMeal.isVeggie})}
+                                                className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${currentMeal.isVeggie ? 'border-green-500 bg-green-50 text-green-700' : 'border-slate-100 text-slate-300'}`}
+                                            ><i data-lucide="leaf" size="16"></i> Veggie</button>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-3 pt-4">
+                                        {editingId && (
+                                            <button 
+                                                type="button" 
+                                                onClick={async () => { if(confirm('Löschen?')) { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'meals', editingId)); setIsMealModalOpen(false); } }}
+                                                className="p-4 bg-red-50 text-red-500 rounded-2xl active:bg-red-100"
+                                            ><i data-lucide="trash-2"></i></button>
+                                        )}
+                                        <button type="submit" className="flex-1 bg-orange-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-orange-200 active:scale-95 transition-all">Speichern</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
